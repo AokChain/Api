@@ -1,0 +1,45 @@
+[project]
+name = "aok-api"
+version = "0.1.0"
+description = "AOK api server"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "aiohttp>=3.13.5",
+    "alembic>=1.18.4",
+    "apscheduler>=3.11.2",
+    "async-asgi-testclient==1.4.11",
+    "asyncpg>=0.31.0",
+    "dynaconf>=3.2.13",
+    "fastapi==0.136.3",
+    "greenlet>=3.5.1",
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.2",
+    "pytest-postgresql==5.1.0",
+    "setuptools==82",
+    "sqlalchemy>=2.0.50",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
+python_functions = "test_*"
+python_files = "test_*.py"
+asyncio_mode = "auto"
+testpaths = "tests"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 80
+exclude = [".venv", "venv", "alembic"]
+extend-ignore = [
+    "F821",  # Disable checks for annotated SQLAlchemy relations
+]
+
+[tool.pyright]
+reportAny = false
+reportUnusedCallResult = false
+enableTypeIgnoreComments = true
+reportCallInDefaultInitializer = false
+reportIgnoreCommentWithoutRule = false
+reportUnannotatedClassAttribute = false
+reportUninitializedInstanceVariable = false
