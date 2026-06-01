@@ -29,9 +29,13 @@ def parse_meta(spk):
             "type": spk["type"],
             "amount": spk["token"]["amount"],
             "name": spk["token"]["name"],
-            "units": (spk["token"]["units"] if "units" in spk["token"] else False),
+            "units": (
+                spk["token"]["units"] if "units" in spk["token"] else False
+            ),
             "reissuable": (
-                spk["token"]["reissuable"] if "reissuable" in spk["token"] else False
+                spk["token"]["reissuable"]
+                if "reissuable" in spk["token"]
+                else False
             ),
         }
 
@@ -48,12 +52,14 @@ async def parse_outputs(transaction_data: dict):
             continue
 
         if "token" in spk:
-            timelock = spk["token"]["timelock"]
+            timelock = spk["token"]["token_lock_time"]
             currency = spk["token"]["name"]
             amount = spk["token"]["amount"]
 
         else:
-            timelock = int(spk["asm"].split(" ", 1)[0]) if spk["type"] == "cltv" else 0
+            timelock = (
+                int(spk["asm"].split(" ", 1)[0]) if spk["type"] == "cltv" else 0
+            )
             currency = constants.DEFAULT_CURRENCY
             amount = vout["value"]
 
@@ -122,7 +128,9 @@ async def build_movements(
 
     for transaction_result in input_transactions_result:
         transaction_data = transaction_result["result"]
-        vin_vouts: list[dict[str, typing.Any]] = await parse_outputs(transaction_data)
+        vin_vouts: list[dict[str, typing.Any]] = await parse_outputs(
+            transaction_data
+        )
 
         for vout in vin_vouts:
             input_outputs[vout["shortcut"]] = vout
