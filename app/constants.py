@@ -3,3 +3,6 @@ DEFAULT_CURRENCY = "AOK"
 DEFAULT_PAGINATION_SIZE = 10
 
 TIMELOCK_TIMESTAMP_TRESHOLD = 500_000_000
+
+# Number of blocks fetched/parsed per batched sync window
+SYNC_BATCH_SIZE = 50

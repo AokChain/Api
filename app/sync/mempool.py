@@ -1,9 +1,9 @@
-import time
-
 from app import sessionmanager, parser, get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import MemPool
 from sqlalchemy import select
+from datetime import datetime
+import time
 
 
 async def sync_mempool():
@@ -57,6 +57,11 @@ async def sync_mempool():
                 data["inputs"].remove(input_)
 
             raw_mempool["transactions"].append(transaction)
+
+        raw_mempool = {
+            key: val.timestamp() if isinstance(val, datetime) else val
+            for key, val in raw_mempool.items()
+        }
 
         mempool.raw = raw_mempool
 

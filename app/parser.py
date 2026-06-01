@@ -112,11 +112,13 @@ async def parse_inputs(transaction_data: dict):
     return inputs
 
 
-async def build_movements(
+async def resolve_source_outputs(
     settings: typing.Any,
-    inputs: list[dict[str, typing.Any]],
-    outputs: list[dict[str, typing.Any]],
-):
+    source_txids: list[str],
+) -> dict[str, typing.Any]:
+    if not source_txids:
+        return {}
+
     input_transactions_result = await make_request(
         settings.blockchain.endpoint,
         [
@@ -125,7 +127,7 @@ async def build_movements(
                 "method": "getrawtransaction",
                 "params": [txid, True],
             }
-            for txid in list(set([vin["source_txid"] for vin in inputs]))
+            for txid in source_txids
         ],
     )
 
@@ -140,6 +142,14 @@ async def build_movements(
         for vout in vin_vouts:
             input_outputs[vout["shortcut"]] = vout
 
+    return input_outputs
+
+
+def compute_movements(
+    inputs: list[dict[str, typing.Any]],
+    outputs: list[dict[str, typing.Any]],
+    input_outputs: dict[str, typing.Any],
+):
     # Use convenient defaultdict to not bloat code with setdefault calls
     movements: dict[
         str, dict[str, dict[typing.Literal["locked", "amount"], Decimal]]
@@ -175,13 +185,21 @@ async def build_movements(
     }
 
 
-async def process_transactions(
+async def build_movements(
+    settings: typing.Any,
+    inputs: list[dict[str, typing.Any]],
+    outputs: list[dict[str, typing.Any]],
+):
+    source_txids = list(set(vin["source_txid"] for vin in inputs))
+    input_outputs = await resolve_source_outputs(settings, source_txids)
+    return compute_movements(inputs, outputs, input_outputs)
+
+
+async def extract_transactions(
     transactions_data: list[dict],
     stake: bool = False,
     block_hash: str | None = None,
 ):
-    settings = get_settings()
-
     # Skip firt tx for pos blocks
     if stake:
         transactions_data = transactions_data[1:]
@@ -231,6 +249,20 @@ async def process_transactions(
 
         inputs += await parse_inputs(transaction_data)
 
+    return transactions, outputs, inputs
+
+
+async def process_transactions(
+    transactions_data: list[dict],
+    stake: bool = False,
+    block_hash: str | None = None,
+):
+    settings = get_settings()
+
+    transactions, outputs, inputs = await extract_transactions(
+        transactions_data, stake, block_hash
+    )
+
     movements = await build_movements(settings, inputs, outputs)
 
     return {
@@ -266,52 +298,111 @@ async def parse_transactions(txids: list[str], stake: bool = False):
     return await process_transactions(transactions_data, stake)
 
 
-async def parse_block(height: int):
-    settings = get_settings()
-
-    result = {}
-
-    block_hash_result = await make_request(
-        settings.blockchain.endpoint,
-        {
-            "id": f"blockhash-#{height}",
-            "method": "getblockhash",
-            "params": [height],
+def build_block_result(
+    block_data: dict,
+    transactions: list,
+    outputs: list,
+    inputs: list,
+    movements: dict,
+):
+    return {
+        "transactions": transactions,
+        "outputs": outputs,
+        "inputs": inputs,
+        "block": {
+            "prev_blockhash": block_data.get("previousblockhash", None),
+            "created": datetime.fromtimestamp(block_data["time"]),
+            "movements": movements,
+            "transactions": [tx["txid"] for tx in block_data["tx"]],
+            "blockhash": block_data["hash"],
+            "timestamp": block_data["time"],
+            "height": block_data["height"],
         },
-    )
-
-    block_hash = block_hash_result["result"]
-
-    block_data_result = await make_request(
-        settings.blockchain.endpoint,
-        {
-            "id": f"block-#{block_hash}",
-            "method": "getblock",
-            "params": [block_hash, 2],
-        },
-    )
-
-    block_data = block_data_result["result"]
-
-    stake = block_data["flags"] == "proof-of-stake"
-
-    # Verbosity 2 inlines the full transactions, so no extra getrawtransaction
-    # round trips are needed to parse the block
-    transactions_data = await process_transactions(
-        [] if height == 0 else block_data["tx"], stake, block_hash
-    )
-
-    result["transactions"] = transactions_data["transactions"]
-    result["outputs"] = transactions_data["outputs"]
-    result["inputs"] = transactions_data["inputs"]
-    result["block"] = {
-        "prev_blockhash": block_data.get("previousblockhash", None),
-        "created": datetime.fromtimestamp(block_data["time"]),
-        "movements": transactions_data["movements"],
-        "transactions": [tx["txid"] for tx in block_data["tx"]],
-        "blockhash": block_data["hash"],
-        "timestamp": block_data["time"],
-        "height": block_data["height"],
     }
 
-    return result
+
+async def parse_blocks(heights: list[int]):
+    settings = get_settings()
+
+    if not heights:
+        return []
+
+    # Stage 1: resolve every block hash in a single batched request
+    hash_results = await make_request(
+        settings.blockchain.endpoint,
+        [
+            {
+                "id": f"blockhash-{height}",
+                "method": "getblockhash",
+                "params": [height],
+            }
+            for height in heights
+        ],
+    )
+
+    hash_by_id = {
+        result["id"]: result.get("result") for result in hash_results
+    }
+
+    # Stop at the first gap (tip moved or reorg mid-window); the caller resumes
+    # from there and the per-tip reorg check handles any rollback
+    block_hashes = []
+    resolved_heights = []
+    for height in heights:
+        block_hash = hash_by_id.get(f"blockhash-{height}")
+        if block_hash is None:
+            break
+        resolved_heights.append(height)
+        block_hashes.append(block_hash)
+
+    if not block_hashes:
+        return []
+
+    # Stage 2: fetch every block with verbosity 2 (transactions inlined) at once
+    block_results = await make_request(
+        settings.blockchain.endpoint,
+        [
+            {
+                "id": f"block-{block_hash}",
+                "method": "getblock",
+                "params": [block_hash, 2],
+            }
+            for block_hash in block_hashes
+        ],
+    )
+
+    block_by_id = {result["id"]: result["result"] for result in block_results}
+
+    # Parse each block and collect the source txids spent across the whole window
+    parsed = []
+    source_txids: set[str] = set()
+
+    for height, block_hash in zip(resolved_heights, block_hashes):
+        block_data = block_by_id[f"block-{block_hash}"]
+        stake = block_data["flags"] == "proof-of-stake"
+
+        transactions, outputs, inputs = await extract_transactions(
+            [] if height == 0 else block_data["tx"], stake, block_hash
+        )
+
+        parsed.append((block_data, transactions, outputs, inputs))
+        source_txids.update(vin["source_txid"] for vin in inputs)
+
+    # Stage 3: resolve the spent outputs for the entire window in one request
+    input_outputs = await resolve_source_outputs(settings, list(source_txids))
+
+    return [
+        build_block_result(
+            block_data,
+            transactions,
+            outputs,
+            inputs,
+            compute_movements(inputs, outputs, input_outputs),
+        )
+        for block_data, transactions, outputs, inputs in parsed
+    ]
+
+
+async def parse_block(height: int):
+    blocks = await parse_blocks([height])
+    return blocks[0]

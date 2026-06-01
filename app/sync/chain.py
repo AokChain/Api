@@ -1,7 +1,7 @@
 import typing
 from sqlalchemy import func, select, update, delete, desc, text
 from app import constants
-from app.parser import make_request, parse_block
+from app.parser import make_request, parse_block, parse_blocks
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import sessionmanager
 from app.settings import get_settings
@@ -464,21 +464,36 @@ async def sync_chain():
         )
 
         chain_blocks = chain_data["result"]["blocks"]
-        display_log = (chain_blocks - latest.height) < 100
 
-        for height in range(latest.height + 1, chain_blocks + 1):
+        height = latest.height + 1
+
+        while height <= chain_blocks:
+            window = list(
+                range(
+                    height,
+                    min(height + constants.SYNC_BATCH_SIZE, chain_blocks + 1),
+                )
+            )
+
             try:
-                if display_log:
-                    print(f"Processing block #{height}")
-                else:
-                    if height % 100 == 0:
-                        print(f"Processing block #{height}")
+                blocks = await parse_blocks(window)
 
-                block_data = await parse_block(height)
+                # No blocks resolved (tip moved/reorg); resume next invocation
+                if not blocks:
+                    break
 
-                await process_block(session, block_data)
+                for block_data in blocks:
+                    await process_block(session, block_data)
 
+                # One commit per window instead of one per block
                 await session.commit()
+
+                print(
+                    f"Processed blocks #{blocks[0]['block']['height']}"
+                    f"-#{blocks[-1]['block']['height']}"
+                )
+
+                height += len(blocks)
 
             except KeyboardInterrupt:
                 print("Keyboard interrupt")
