@@ -57,9 +57,14 @@ async def parse_outputs(transaction_data: dict):
             amount = spk["token"]["amount"]
 
         else:
-            timelock = (
-                int(spk["asm"].split(" ", 1)[0]) if spk["type"] == "cltv" else 0
-            )
+            timelock = 0
+
+            if spk["type"] == "cltv":
+                key = spk["asm"].split(" ", 1)[0]
+
+                if key.isdigit():
+                    timelock = int(key)
+
             currency = constants.DEFAULT_CURRENCY
             amount = vout["value"]
 
@@ -202,7 +207,9 @@ async def process_transactions(
         )
 
         # getrawtransaction exposes the tx time as "time", getblock v2 as "timestamp"
-        timestamp = transaction_data.get("time", transaction_data.get("timestamp"))
+        timestamp = transaction_data.get(
+            "time", transaction_data.get("timestamp")
+        )
         created = datetime.fromtimestamp(timestamp) if timestamp else None
 
         transactions.append(
