@@ -170,33 +170,27 @@ async def build_movements(
     }
 
 
-async def parse_transactions(txids: list[str], stake: bool = False):
+async def process_transactions(
+    transactions_data: list[dict],
+    stake: bool = False,
+    block_hash: str | None = None,
+):
     settings = get_settings()
 
     # Skip firt tx for pos blocks
     if stake:
-        txids = txids[1:]
-
-    transactions_result = await make_request(
-        settings.blockchain.endpoint,
-        [
-            {
-                "id": f"tx-{txid}",
-                "method": "getrawtransaction",
-                "params": [txid, True],
-            }
-            for txid in txids
-        ],
-    )
+        transactions_data = transactions_data[1:]
 
     transactions = []
     outputs = []
     inputs = []
 
-    for transaction_result in transactions_result:
-        transaction_data = transaction_result["result"]
+    for index, transaction_data in enumerate(transactions_data):
+        # getblock verbosity 2 inlines transactions without the block context
+        # fields getrawtransaction adds, so backfill the blockhash here
+        if block_hash is not None:
+            transaction_data["blockhash"] = block_hash
 
-        index = txids.index(transaction_data["txid"])
         coinbase = index == 0 and not stake
 
         addresses = list(
@@ -206,7 +200,9 @@ async def parse_transactions(txids: list[str], stake: bool = False):
                 for address in vout["scriptPubKey"].get("addresses", [])
             )
         )
-        timestamp = transaction_data.get("time", None)
+
+        # getrawtransaction exposes the tx time as "time", getblock v2 as "timestamp"
+        timestamp = transaction_data.get("time", transaction_data.get("timestamp"))
         created = datetime.fromtimestamp(timestamp) if timestamp else None
 
         transactions.append(
@@ -238,6 +234,31 @@ async def parse_transactions(txids: list[str], stake: bool = False):
     }
 
 
+async def parse_transactions(txids: list[str], stake: bool = False):
+    settings = get_settings()
+
+    transactions_result = await make_request(
+        settings.blockchain.endpoint,
+        [
+            {
+                "id": f"tx-{txid}",
+                "method": "getrawtransaction",
+                "params": [txid, True],
+            }
+            for txid in txids
+        ],
+    )
+
+    # Preserve the requested order regardless of how the node orders the batch
+    by_txid = {
+        result["result"]["txid"]: result["result"]
+        for result in transactions_result
+    }
+    transactions_data = [by_txid[txid] for txid in txids]
+
+    return await process_transactions(transactions_data, stake)
+
+
 async def parse_block(height: int):
     settings = get_settings()
 
@@ -259,7 +280,7 @@ async def parse_block(height: int):
         {
             "id": f"block-#{block_hash}",
             "method": "getblock",
-            "params": [block_hash],
+            "params": [block_hash, 2],
         },
     )
 
@@ -267,8 +288,10 @@ async def parse_block(height: int):
 
     stake = block_data["flags"] == "proof-of-stake"
 
-    transactions_data = await parse_transactions(
-        [] if height == 0 else block_data["tx"], stake
+    # Verbosity 2 inlines the full transactions, so no extra getrawtransaction
+    # round trips are needed to parse the block
+    transactions_data = await process_transactions(
+        [] if height == 0 else block_data["tx"], stake, block_hash
     )
 
     result["transactions"] = transactions_data["transactions"]
@@ -278,7 +301,7 @@ async def parse_block(height: int):
         "prev_blockhash": block_data.get("previousblockhash", None),
         "created": datetime.fromtimestamp(block_data["time"]),
         "movements": transactions_data["movements"],
-        "transactions": block_data["tx"],
+        "transactions": [tx["txid"] for tx in block_data["tx"]],
         "blockhash": block_data["hash"],
         "timestamp": block_data["time"],
         "height": block_data["height"],
