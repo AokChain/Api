@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, UTC
 from typing import Sequence
 from app import constants
+import aiohttp
 import typing
 import math
 
@@ -54,6 +55,26 @@ def paginated_response(
 
 def to_satoshi(x: float) -> int:
     return int(x * math.pow(10, 8))
+
+
+async def get_ipfs_data(ipfs):
+    endpoint = f"https://ipfs.aok.network/ipfs/{ipfs}"
+    content = None
+
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            async with session.head(endpoint) as head:
+                if head.status == 200:
+                    if head.headers.get("Content-Type") == "application/json":
+                        async with session.get(endpoint) as r:
+                            content = await r.json()
+
+        return content
+
+    except asyncio.TimeoutError:
+        return {}
 
 
 def get_token_icon(name: str):
