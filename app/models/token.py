@@ -17,5 +17,5 @@ class Token(Base):
     units: Mapped[int]
 
     data: Mapped[dict] = mapped_column(JSONB, default={})
-    ipfs_hash: Mapped[int] = mapped_column(nullable=True)
-    has_ipfs: Mapped[str] = mapped_column(nullable=True)
+    ipfs_hash: Mapped[str] = mapped_column(nullable=True)
+    has_ipfs: Mapped[int] = mapped_column(nullable=True)
