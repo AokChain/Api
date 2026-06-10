@@ -34,6 +34,6 @@ async def list_tokens_names(session: AsyncSession = Depends(get_session)):
     return items
 
 
-@router.get("/{name}", response_model=FullTokenResponse)
+@router.get("/{name:path}", response_model=FullTokenResponse)
 async def token_by_name(token: Token = Depends(require_full_token)):
     return token
