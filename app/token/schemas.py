@@ -4,6 +4,7 @@ from app.schemas import CustomModel, Satoshi
 class TokenResponse(CustomModel):
     reissuable: bool
     amount: Satoshi
+    data: dict
     units: int
     name: str
     type: str
